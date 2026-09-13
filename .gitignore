@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific: raw data and model artifacts (tracked via DVC in Module 2)
+data/*.parquet
+models/*.pkl
+models/*.onnx
