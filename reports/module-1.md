@@ -146,3 +146,20 @@ docker login
 docker push ahmedfoly/prodml-api:0.1.0
 docker push ahmedfoly/prodml-api:latest
 ```
+
+---
+
+## 7. MLOps Maturity Self-Assessment
+
+### Five-Level Maturity Model Placement
+
+| Level | Maturity Stage | Description | Repository Status |
+| :---: | :--- | :--- | :---: |
+| **0** | **No MLOps** | Ad-hoc notebooks, manual deployments, no testing or logging. | Surpassed |
+| **1** | **Manual Process** | Modular code, automated tests with coverage gates, containerization, structured logging, but manual training execution. | **CURRENT LEVEL** |
+| **2** | **ML Pipeline** | Automated orchestration, experiment tracking, model registry, automated retraining on data trigger. | *Target (Module 2)* |
+| **3** | **CD for ML** | Continuous automated model testing, canary/shadow deployment, progressive delivery. | Future |
+| **4** | **Full MLOps** | Automated drift detection, continuous training (CT), closed-loop feedback and self-healing systems. | Future |
+
+### Gap Analysis to Reach Level 2
+To reach Level 2 (ML Pipeline), we require an automated workflow orchestrator (such as Prefect or Airflow) combined with an experiment tracking and model registry system (such as MLflow) to automate reproducible training, feature validation, and model artifact versioning upon new data arrival. Currently, pipeline execution and model updates remain manual developer tasks triggered locally via the CLI, which will be fully automated with orchestrated pipelines and experiment tracking in Module 2.
