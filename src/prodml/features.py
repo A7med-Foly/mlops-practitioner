@@ -129,8 +129,13 @@ def dict_to_feature_dict(record: dict[str, Any]) -> dict[str, Any]:
             record["store_and_fwd_flag"]
         )
     else:
-        # Default fallback
         output["store_and_fwd_flag_encoded"] = 0
+
+    # Handle PU_DO interaction feature
+    if "PU_DO" in record:
+        output["PU_DO"] = str(record["PU_DO"])
+    elif "PULocationID" in record and "DOLocationID" in record:
+        output["PU_DO"] = f"{record['PULocationID']}_{record['DOLocationID']}"
 
     return output
 

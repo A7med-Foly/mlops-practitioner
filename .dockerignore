@@ -1,0 +1,14 @@
+.git
+.venv
+notebooks/
+data/
+tests/
+__pycache__
+*.pyc
+*.ipynb
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+reports/
+scripts/
