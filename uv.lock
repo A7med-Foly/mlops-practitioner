@@ -554,6 +554,7 @@ source = { editable = "." }
 dependencies = [
     { name = "black" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "pandas" },
@@ -583,6 +584,7 @@ requires-dist = [
     { name = "black", specifier = ">=26.5.1" },
     { name = "black", marker = "extra == 'dev'" },
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "numpy", specifier = ">=2.5.3" },
