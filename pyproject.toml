@@ -1,0 +1,28 @@
+[project]
+name = "mlops-practitioner"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "black>=26.5.1",
+    "fastapi>=0.141.1",
+    "numpy>=2.5.3",
+    "pandas>=3.0.5",
+    "pre-commit>=4.6.2",
+    "pyarrow>=25.0.1",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "ruff>=0.16.7",
+    "scikit-learn>=1.9.1",
+    "uvicorn>=0.52.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest","pytest-cov","ruff","black","mypy","httpx","pre-commit"]
+
+[project.scripts]
+prodml-train = "prodml.train:main"
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
