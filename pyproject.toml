@@ -29,3 +29,13 @@ prodml-train = "prodml.train:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/prodml --cov-fail-under=70"
+testpaths = ["tests"]
