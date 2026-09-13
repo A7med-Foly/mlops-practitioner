@@ -91,10 +91,14 @@ class TestOnnxParity(unittest.TestCase):
             onnx_latencies.append((time.perf_counter() - t0) * 1000)
 
         pkl_mean = float(np.mean(pkl_latencies))
+        pkl_p95 = float(np.percentile(pkl_latencies, 95))
         onnx_mean = float(np.mean(onnx_latencies))
+        onnx_p95 = float(np.percentile(onnx_latencies, 95))
 
         self.assertGreater(pkl_mean, 0.0)
+        self.assertGreater(pkl_p95, 0.0)
         self.assertGreater(onnx_mean, 0.0)
+        self.assertGreater(onnx_p95, 0.0)
         # ONNX single-row latency is expected to be substantially faster than Python scikit-learn
         self.assertLess(onnx_mean, pkl_mean)
 

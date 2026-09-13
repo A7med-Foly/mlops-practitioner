@@ -1,0 +1,74 @@
+# Module 1: Packaging, Structured Logging & Serialization Report
+
+## 1. Executive Summary
+
+This report documents the decomposition of the baseline exploratory notebook into a production-grade Python package (`prodml`), the evaluation of the baseline model, and the benchmarking of serialization formats for inference serving (Pickle vs. ONNX Runtime).
+
+---
+
+## 2. Baseline Model Performance
+
+### Dataset & Training Setup
+- **Dataset**: NYC Green Taxi Trip Records (`green_tripdata_2026-05.parquet`)
+- **Total Raw Records**: 44,921 rows
+- **Cleaned Records**: 37,535 rows (after filtering missing value subsets, trip distance $\le 0$, and duration outliers $> 99.5\text{th}$ percentile)
+- **Split Proportions**: 60% Train (22,521 rows), 20% Validation (7,507 rows), 20% Test (7,507 rows)
+- **Selected Features**: `cbd_congestion_fee`, `congestion_surcharge`, `fare_amount`, `improvement_surcharge`, `store_and_fwd_flag_encoded`, `tip_amount`, `tolls_amount`, `total_amount`, `trip_distance`
+- **Target**: `trip_duration` (minutes)
+
+### Validation Metrics
+
+| Model Architecture | Hyperparameters | MAE (minutes) | RMSE (minutes) | $R^2$ Score |
+| :--- | :--- | :---: | :---: | :---: |
+| **Linear Regression** (Baseline) | Default OLS | 3.0805 | 6.0967 | 0.6993 |
+| **Random Forest Regressor** (Production) | `n_estimators=100`, `n_jobs=-1`, `random_state=42` | **1.6768** | **5.2949** | **0.7728** |
+
+The Random Forest Regressor achieves a Mean Absolute Error of **1.68 minutes** on unseen validation trips, explaining **77.28%** of the variance in trip duration.
+
+---
+
+## 3. Serialization: Pickle vs. ONNX Runtime
+
+### ONNX Export & Architecture
+- **Export Engine**: `skl2onnx` (`skl2onnx.convert_sklearn`)
+- **Dynamic Axes**: Configured on the batch dimension (`[None, 9]` $\to$ `[None, 1]`) to support dynamic single-item and arbitrary batch queries.
+- **Model Artifact**: Persisted to [`models/baseline.onnx`](file:///home/ahmed/data/mlops-practitioner/models/baseline.onnx).
+
+### Numerical Parity Test
+Numerical equivalence was tested on 500 validation rows using `onnxruntime`:
+
+$$\max \left| y_{\text{pickle}} - y_{\text{onnx}} \right| = 0.00001632 < 10^{-4}$$
+
+```python
+assert np.allclose(pred_pkl, pred_onnx, atol=1e-4)  # PASSED
+```
+
+Both models produce identical predictions within strict numerical tolerances.
+
+---
+
+## 4. Latency Benchmarks (500 Validation Rows)
+
+Benchmarked on identical hardware across 500 validation rows using [`scripts/benchmark.py`](file:///home/ahmed/data/mlops-practitioner/scripts/benchmark.py):
+
+| Inference Mode | Metric | Pickle (`scikit-learn`) | ONNX Runtime (`onnxruntime`) | Speedup |
+| :--- | :--- | :---: | :---: | :---: |
+| **Single-Row Inference**<br/>*(500 sequential calls)* | **Mean Latency** | **26.543 ms** | **0.050 ms** ($50\,\mu\text{s}$) | **533.3x faster** |
+| | **P95 Latency** | **36.927 ms** | **0.065 ms** ($65\,\mu\text{s}$) | **564.5x faster** |
+| **Batch Inference**<br/>*(500 rows/call, 50 trials)* | **Mean Latency** | **34.557 ms** | **10.132 ms** | **3.4x faster** |
+| | **P95 Latency** | **36.398 ms** | **11.269 ms** | **3.2x faster** |
+
+### Benchmark Analysis
+1. **Single-Row Latency Drop**: ONNX Runtime delivers **sub-millisecond latency** ($50\,\mu\text{s}$ vs $26.5\,\text{ms}$). By bypassing Python object allocation and GIL overhead, ONNX enables high-throughput online API serving.
+2. **Tail Latency (P95)**: P95 latency is bounded at **$0.065\,\text{ms}$** for ONNX, compared to **$36.9\,\text{ms}$** for Pickle, ensuring consistent SLA compliance.
+
+---
+
+## 5. Serialization Formats Comparison Table
+
+| Serialization Format | Human-Readable | Cross-Language | Schema-Enforced | Safe to Load from Untrusted Source |
+| :--- | :---: | :---: | :---: | :---: |
+| **JSON** | Yes (UTF-8 text) | Yes (Universal) | No (requires external schema) | Yes (pure data) |
+| **Protobuf** | No (binary wire) | Yes (C++, Python, Go, Java, Rust) | Yes (enforced by compiled `.proto`) | Yes (pure data) |
+| **Pickle** | No (binary opcode) | No (CPython only) | No (vulnerable to environment drift) | **NO (Arbitrary Code Execution)** |
+| **ONNX** | No (binary graph) | Yes (C++, Python, Go, JS, Rust) | Yes (strict tensor shapes & opsets) | Yes (static computational graph) |
