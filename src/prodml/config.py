@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------
     data_path: Path = Path("data/green_tripdata_2026-05.parquet")
     models_dir: Path = Path("models")
-    model_name: str = "baseline.pkl"
+    model_name: str = "baseline.onnx"
 
     @property
     def model_path(self) -> Path:

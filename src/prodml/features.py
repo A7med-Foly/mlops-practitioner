@@ -6,9 +6,23 @@ and dictionary formatting for DictVectorizer integration.
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.pipeline import Pipeline
+
+# Ordered feature names matching DictVectorizer alphabetical sorting for ONNX tensors
+ORDERED_FEATURE_NAMES = [
+    "cbd_congestion_fee",
+    "congestion_surcharge",
+    "fare_amount",
+    "improvement_surcharge",
+    "store_and_fwd_flag_encoded",
+    "tip_amount",
+    "tolls_amount",
+    "total_amount",
+    "trip_distance",
+]
 
 # Explicit list of feature names used by the baseline model
 FEATURE_COLUMNS = [
@@ -179,3 +193,27 @@ def build_pipeline(model: Any) -> Pipeline:
         Pipeline instance.
     """
     return Pipeline([("vectorizer", create_vectorizer()), ("model", model)])
+
+
+def features_to_matrix(
+    records: list[dict[str, Any]],
+    feature_names: list[str] | None = None,
+) -> np.ndarray:
+    """Convert list of prepared feature dictionaries into a 2D float32 numpy array.
+
+    Args:
+        records: List of feature dictionaries (from prepare_features).
+        feature_names: List of expected feature column names in order.
+                       Defaults to ORDERED_FEATURE_NAMES.
+
+    Returns:
+        np.ndarray of shape (len(records), len(feature_names)) with dtype float32.
+    """
+    if feature_names is None:
+        feature_names = ORDERED_FEATURE_NAMES
+
+    matrix = np.empty((len(records), len(feature_names)), dtype=np.float32)
+    for i, record in enumerate(records):
+        for j, name in enumerate(feature_names):
+            matrix[i, j] = float(record.get(name, 0.0))
+    return matrix

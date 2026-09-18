@@ -86,10 +86,12 @@ def export_baseline(
         Path to the exported .onnx artifact.
     """
     settings = get_settings()
-    src_path = Path(model_path) if model_path else settings.model_path
+    src_path = (
+        Path(model_path) if model_path else (settings.models_dir / "baseline.pkl")
+    )
 
     if output_path is None:
-        dest_path = src_path.with_suffix(".onnx")
+        dest_path = settings.models_dir / "baseline.onnx"
     else:
         dest_path = Path(output_path)
 

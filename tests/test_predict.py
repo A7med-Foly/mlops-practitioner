@@ -42,3 +42,28 @@ def test_prediction_batch(trained_model: DurationPredictor, sample_features: dic
     for p in preds:
         assert isinstance(p, float)
         assert 0.0 < p < 300.0
+
+
+def test_onnx_predictor_loading_and_inference(sample_features: dict):
+    """DurationPredictor.load with .onnx model must instantiate an ONNX session and predict correctly."""
+    from prodml.config import get_settings
+
+    settings = get_settings()
+    onnx_path = settings.models_dir / "baseline.onnx"
+    assert onnx_path.exists()
+
+    predictor = DurationPredictor.load(onnx_path)
+    assert predictor.is_onnx is True
+    assert predictor.is_ready is True
+    assert predictor.input_name == "float_input"
+    assert predictor.output_name == "variable"
+
+    pred = predictor.predict_one(sample_features)
+    assert isinstance(pred, float)
+    assert 0.0 < pred < 300.0
+
+    batch_preds = predictor.predict_batch([sample_features, sample_features])
+    assert len(batch_preds) == 2
+    for p in batch_preds:
+        assert isinstance(p, float)
+        assert 0.0 < p < 300.0

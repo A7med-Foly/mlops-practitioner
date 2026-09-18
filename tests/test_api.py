@@ -21,6 +21,7 @@ def test_health_returns_200(client: TestClient):
     validated = HealthResponse.model_validate(data)
     assert validated.status == "healthy"
     assert validated.model_loaded is True
+    assert "baseline.onnx" in validated.model_path
 
 
 def test_metadata_schema_matches(client: TestClient):
@@ -33,6 +34,7 @@ def test_metadata_schema_matches(client: TestClient):
     assert validated.model_version == "0.1.0"
     assert len(validated.feature_names) > 0
     assert len(validated.artifact_hash) > 0
+    assert "ONNX Runtime" in validated.framework
 
 
 def test_predict_happy_path(client: TestClient, sample_features: dict):

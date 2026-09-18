@@ -13,8 +13,8 @@ from prodml.features import prepare_features
 def test_pickle_onnx_numerical_parity():
     """Assert numerical parity between Pickle and ONNX models on 500 validation rows."""
     settings = get_settings()
-    pkl_path = settings.model_path
-    onnx_path = pkl_path.with_suffix(".onnx")
+    pkl_path = settings.models_dir / "baseline.pkl"
+    onnx_path = settings.models_dir / "baseline.onnx"
 
     # Ensure ONNX model exists
     if not onnx_path.exists():

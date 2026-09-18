@@ -14,8 +14,8 @@ from prodml.features import prepare_features
 
 def run_benchmark(n_samples: int = 500, n_batch_trials: int = 50) -> None:
     settings = get_settings()
-    pkl_path = settings.model_path
-    onnx_path = pkl_path.with_suffix(".onnx")
+    pkl_path = settings.models_dir / "baseline.pkl"
+    onnx_path = settings.models_dir / "baseline.onnx"
 
     if not onnx_path.exists():
         print("Exporting ONNX model first...")
