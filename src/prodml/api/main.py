@@ -19,7 +19,10 @@ import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+import onnxruntime as ort
 import sklearn
+
+from prodml.features import ORDERED_FEATURE_NAMES
 
 from prodml.api.schemas import (
     BatchPredictionRequest,
@@ -67,32 +70,23 @@ def compute_model_metadata(
     else:
         training_date = datetime.now(timezone.utc).isoformat()
 
-    # Extract feature names from vectorizer
-    feature_names: list[str] = []
-    model_obj = getattr(predictor, "model", None)
-    if hasattr(model_obj, "named_steps") and "vectorizer" in model_obj.named_steps:
-        dv = model_obj.named_steps["vectorizer"]
-        if hasattr(dv, "get_feature_names_out"):
-            feature_names = list(dv.get_feature_names_out())
+    # Extract feature names
+    if predictor and getattr(predictor, "feature_names", None):
+        feature_names = list(predictor.feature_names)
+    else:
+        feature_names = list(ORDERED_FEATURE_NAMES)
 
-    if not feature_names:
-        feature_names = [
-            "cbd_congestion_fee",
-            "congestion_surcharge",
-            "fare_amount",
-            "improvement_surcharge",
-            "store_and_fwd_flag_encoded",
-            "tip_amount",
-            "tolls_amount",
-            "total_amount",
-            "trip_distance",
-        ]
+    # Determine framework dynamically
+    if predictor and getattr(predictor, "is_onnx", False):
+        framework = f"ONNX Runtime {ort.__version__}"
+    else:
+        framework = f"scikit-learn {sklearn.__version__}"
 
     return {
         "model_version": "0.1.0",
         "training_date": training_date,
         "feature_names": feature_names,
-        "framework": f"scikit-learn {sklearn.__version__}",
+        "framework": framework,
         "artifact_hash": artifact_hash,
     }
 
@@ -210,7 +204,7 @@ async def health_check():
     settings = get_settings()
     predictor = getattr(app.state, "predictor", None)
 
-    if predictor is None or getattr(predictor, "model", None) is None:
+    if predictor is None or not getattr(predictor, "is_ready", False):
         logger.error("Health check failed: model object not loaded in memory.")
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

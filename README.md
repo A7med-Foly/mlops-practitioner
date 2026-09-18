@@ -86,7 +86,7 @@ curl -i http://localhost:8000/health
 {
   "status": "healthy",
   "model_loaded": true,
-  "model_path": "models/baseline.pkl"
+  "model_path": "models/baseline.onnx"
 }
 ```
 
@@ -114,8 +114,8 @@ curl -i http://localhost:8000/metadata
     "total_amount",
     "trip_distance"
   ],
-  "framework": "scikit-learn 1.9.1",
-  "artifact_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  "framework": "ONNX Runtime 1.30.0",
+  "artifact_hash": "1edfc915827eb384d36a203d542ce8a4e928045cba6a34b97245de6fa53b4135"
 }
 ```
 
@@ -173,7 +173,7 @@ Performs vectorized batch prediction over an array of trips.
 curl -X POST http://localhost:8000/predict/batch \
   -H "Content-Type: application/json" \
   -d '{
-    "items": [
+    "trips": [
       {"trip_distance": 1.2, "fare_amount": 7.5, "total_amount": 9.0, "store_and_fwd_flag": "N"},
       {"trip_distance": 8.5, "fare_amount": 32.0, "total_amount": 38.0, "store_and_fwd_flag": "Y"}
     ]
