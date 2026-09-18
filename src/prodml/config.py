@@ -6,9 +6,11 @@ with the 'PRODML_' prefix or a local .env file.
 """
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,8 +65,55 @@ class Settings(BaseSettings):
     server_port: int = 8000
     log_level: str = "INFO"
 
+    # ---------------------------------------------------------
+    # Tracking Server & MLflow Configuration (Module 2)
+    # ---------------------------------------------------------
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices(
+            "PRODML_MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_URI"
+        ),
+    )
+    mlflow_experiment_name: str = Field(
+        default="nyc-taxi-duration",
+        validation_alias=AliasChoices(
+            "PRODML_MLFLOW_EXPERIMENT_NAME", "MLFLOW_EXPERIMENT_NAME"
+        ),
+    )
+    mlflow_s3_endpoint_url: str = Field(
+        default="http://localhost:9000",
+        validation_alias=AliasChoices(
+            "MLFLOW_S3_ENDPOINT_URL", "PRODML_MLFLOW_S3_ENDPOINT_URL"
+        ),
+    )
+    aws_access_key_id: str = Field(
+        default="minioadmin",
+        validation_alias=AliasChoices("AWS_ACCESS_KEY_ID", "PRODML_AWS_ACCESS_KEY_ID"),
+    )
+    aws_secret_access_key: str = Field(
+        default="minioadmin",
+        validation_alias=AliasChoices(
+            "AWS_SECRET_ACCESS_KEY", "PRODML_AWS_SECRET_ACCESS_KEY"
+        ),
+    )
+    aws_default_region: str = Field(
+        default="us-east-1",
+        validation_alias=AliasChoices(
+            "AWS_DEFAULT_REGION", "PRODML_AWS_DEFAULT_REGION"
+        ),
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return a cached singleton instance of Settings."""
-    return Settings()
+    """Return a cached singleton instance of Settings and configure client env."""
+    settings = Settings()
+
+    # Ensure AWS and MLflow environment variables are set for boto3 / mlflow client
+    os.environ.setdefault("AWS_ACCESS_KEY_ID", settings.aws_access_key_id)
+    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", settings.aws_secret_access_key)
+    os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", settings.mlflow_s3_endpoint_url)
+    os.environ.setdefault("AWS_DEFAULT_REGION", settings.aws_default_region)
+    os.environ.setdefault("MLFLOW_TRACKING_URI", settings.mlflow_tracking_uri)
+
+    return settings
