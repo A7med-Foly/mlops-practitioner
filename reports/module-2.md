@@ -92,3 +92,99 @@ From the MLflow UI alone:
    - `data_version`: `15ff5784` (SHA256: `15ff57840a1103d49298ad244492730ca4236b4de0d2758a689ded08bc332752`).
 3. **From which git commit?**
    - `git_commit`: `f666a7023b39bb9f31085e2a8df250b62c0d3c9c`.
+
+---
+
+## 7. Model Registry & The Promotion Lifecycle (Step 03)
+
+### 7.1 Architecture & Registry Structure
+The MLflow Model Registry provides a centralized model governance store backed by PostgreSQL metadata and MinIO artifact storage. 
+
+Models are registered under the entity:
+```text
+ride-duration-predictor
+```
+
+### 7.2 Deliberate Lifecycle Walkthrough
+1. **Candidate 1 (Best Run)**:
+   - **Framework**: XGBoost Regressor (`n_estimators=100`, `max_depth=6`, `lr=0.1`)
+   - **Validation MAE**: `1.8271` minutes
+   - **Registration**: Registered as `ride-duration-predictor` Version 1.
+   - **Lifecycle Transitions**:
+     - `None` $\to$ `Staging`
+     - `Staging` $\to$ `Production`
+2. **Candidate 2 (Worse Model)**:
+   - **Framework**: Linear Regression OLS Baseline
+   - **Validation MAE**: `4.0348` minutes
+   - **Registration**: Registered as `ride-duration-predictor` Version 2.
+   - **Stage**: Left deliberately in stage `None` for contrast.
+
+### 7.3 Decoupled Dynamic Loading (`prodml/predict.py`)
+Rather than coupling the serving API to hardcoded local filesystem paths (`models/baseline.onnx`), `DurationPredictor.load()` dynamically resolves model artifacts by lifecycle stage:
+
+```python
+model = mlflow.pyfunc.load_model("models:/ride-duration-predictor/Production")
+```
+
+The underlying predictor detects MLflow `PyFuncModel` instances and formats incoming request features into ordered NumPy arrays/DataFrames matching the training feature schema.
+
+### 7.4 Zero-Code Model Swapping Proof (Acceptance Check)
+To prove that model promotion requires **zero code changes and zero container rebuilds**:
+1. **Serving Version 1 (XGBoost in Production)**:
+   - Queried `POST /predict` with sample trip (`trip_distance=3.5`, `fare_amount=15.0`, `total_amount=18.5`):
+   ```json
+   {
+     "prediction": 10.125722885131836,
+     "model_version": "0.1.0",
+     "correlation_id": "80bb59ed-c947-415b-a98c-c852961dae8c",
+     "latency_ms": 22.21
+   }
+   ```
+   **Prediction served: `10.13` minutes.**
+
+2. **Registry Stage Promotion**:
+   - Promoted Version 2 (Linear Regression) to `Production` in MLflow.
+   - Version 1 was automatically moved to `Archived`.
+
+3. **Zero-Code Container Restart**:
+   - Executed: `docker compose restart prodml-api` (zero rebuilds, zero source changes).
+
+4. **Serving Version 2 (Linear Regression in Production)**:
+   - Re-sent the **exact same HTTP request** to `POST /predict`:
+   ```json
+   {
+     "prediction": 14.745060920715332,
+     "model_version": "0.1.0",
+     "correlation_id": "64e6ef8a-bada-421f-86e5-9b318586754e",
+     "latency_ms": 128.53
+   }
+   ```
+   **Prediction served: `14.75` minutes.**
+
+> [!IMPORTANT]
+> **ACCEPTANCE CHECK PASSED**: Switching the served model from XGBoost ($10.13$ min) to Linear Regression ($14.75$ min) required zero source code edits, zero image rebuilds, and zero configuration changes. The running service read the updated model directly from the registry upon process startup.
+
+---
+
+### 7.5 Automated Continuous Delivery Gate (`prodml/registry.py`)
+To remove manual clicks from the promotion lifecycle, `prodml.registry` implements automated promotion gating:
+
+```python
+def promote_if_better(candidate_run_id: str, model_name: str = "ride-duration-predictor", metric: str = "mae") -> dict[str, Any]
+```
+
+#### Gate Logic:
+- Queries the candidate run's validation metric.
+- Queries the current `Production` model's run metric.
+- If candidate improves the metric (e.g. candidate MAE $<$ production MAE):
+  - Promotes candidate version to `Production`.
+  - Automatically archives previous production version.
+  - Returns `promoted=True` (exit code 0).
+- If candidate does not beat production:
+  - Rejects promotion.
+  - Leaves current production version untouched.
+  - Returns `promoted=False` (exit code 1).
+
+#### Verification of Gate Decisions:
+- **Superior Candidate Promotion**: Candidate `100a7cf01b...` (MAE $1.8271$) beat Production v2 (MAE $4.0348$) $\to$ **PROMOTED** to Version 3 (`exit 0`).
+- **Inferior Candidate Rejection**: Candidate `f9a50a93...` (MAE $4.0348$) tested against Production v3 (MAE $1.8271$) $\to$ **REJECTED** (`exit 1`).

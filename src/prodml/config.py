@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     data_path: Path = Path("data/green_tripdata_2026-05.parquet")
     models_dir: Path = Path("models")
     model_name: str = "baseline.onnx"
+    model_uri: str = Field(
+        default="models:/ride-duration-predictor/Production",
+        validation_alias=AliasChoices("PRODML_MODEL_URI", "MODEL_URI"),
+    )
 
     @property
     def model_path(self) -> Path:
