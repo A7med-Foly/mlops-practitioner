@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Run Ruff Linter
+        run: uv run ruff check .
+
+      - name: Check Code Formatting with Black
+        run: uv run black --check .
+
+  test:
+    name: Unit Tests & Quality Gate
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run Test Suite with Coverage Gate (>= 70%)
+        run: uv run pytest --cov=src/prodml --cov-fail-under=70
+
+      - name: Upload Coverage Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            .coverage
+          if-no-files-found: ignore
+
+      - name: Run Model Quality Gate (MAE Regression <= 5%)
+        run: |
+          uv run python -m prodml.quality_gate \
+            --candidate-metrics metrics.json \
+            --max-regression 0.05 \
+            --git-ref origin/main:metrics.json

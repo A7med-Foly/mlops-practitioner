@@ -353,3 +353,94 @@ mlflow.set_tag("dvc_data_hash", get_dvc_hash("data/processed"))
 > 1. Recovered `dvc_data_hash` (`85a3a393...`) and `git_commit` (`182190cb...`) from the run tags.
 > 2. Located exact dataset split in `dvc.lock` and retrieved from MinIO storage via `dvc checkout`.
 > 3. Running `dvc repro` reproduces identical validation metrics: **MAE: 1.8271, RMSE: 5.4446, $R^2$: 0.7598**.
+
+---
+
+## 9. Continuous Integration with GitHub Actions & Model Quality Gate (Step 05)
+
+### 9.1 CI Workflow Architecture (`.github/workflows/ci.yml`)
+
+The repository integrates an automated CI workflow triggered on all pull requests and pushes to `main`. It leverages `astral-sh/setup-uv@v5` for deterministic, lightning-fast dependency caching and installation.
+
+```mermaid
+flowchart LR
+    Trigger["PR / Push to main"] --> Lint["Job 1: lint<br/>• Ruff Linter<br/>• Black Formatter"]
+    Lint --> Test["Job 2: test<br/>• uv sync --dev<br/>• pytest (cov >= 70%)<br/>• Upload Coverage Artifact<br/>• Model Quality Gate"]
+    Test --> Gate{"MAE Regression<br/>> 5%?"}
+    Gate -- "Yes (Regressed)" --> Fail["❌ Red Check<br/>sys.exit(1)<br/>Merge Blocked"]
+    Gate -- "No (Passed)" --> Pass["✅ Green Check<br/>sys.exit(0)<br/>Merge Allowed"]
+```
+
+#### Key Workflow Stages:
+1. **`lint` Job**:
+   - Checks formatting with `black --check .`.
+   - Lints code and enforces import sorting with `ruff check .`.
+2. **`test` Job** (depends on `lint`):
+   - Installs virtual environment from `uv.lock`.
+   - Executes full automated test suite with coverage threshold (`uv run pytest --cov=src/prodml --cov-fail-under=70`).
+   - Uploads `.coverage` file as a GitHub Actions artifact.
+   - Executes the automated **Model Quality Gate** (`prodml.quality_gate`).
+
+---
+
+### 9.2 Model Quality Gate (`prodml.quality_gate`)
+
+To prevent performance regressions from ever reaching production, `prodml.quality_gate` enforces a strict 5% degradation ceiling:
+
+$$\text{regression\_pct} = \frac{\text{candidate\_mae} - \text{baseline\_mae}}{\text{baseline\_mae}}$$
+
+If $\text{regression\_pct} > +0.05$ ($>5\%$ degradation in MAE), the script calls `sys.exit(1)`, turning the CI check red and preventing PR merge.
+
+#### Verification of Quality Gate Decisions:
+
+1. **Passing Check (Acceptable Candidate)**:
+   ```text
+   ============================================================
+              MODEL QUALITY GATE EVALUATION
+   ============================================================
+   Candidate MAE  : 1.8271 min
+   Baseline MAE   : 1.8271 min
+   Observed Delta : +0.00% (Allowed limit: +5.0%)
+   ------------------------------------------------------------
+   ✅ QUALITY GATE PASSED: Model quality is acceptable (+0.00% <= +5.0%).
+   ============================================================
+   ```
+   *Exit code: `0` (CI Passes).*
+
+2. **Failing Check (Regressed Candidate)**:
+   ```text
+   ============================================================
+              MODEL QUALITY GATE EVALUATION
+   ============================================================
+   Candidate MAE  : 2.0000 min
+   Baseline MAE   : 1.8271 min
+   Observed Delta : +9.46% (Allowed limit: +5.0%)
+   ------------------------------------------------------------
+   ❌ QUALITY GATE FAILED: Candidate MAE regressed by +9.46%, exceeding the +5.0% limit!
+      Merge blocked to prevent serving an inferior model in production.
+   ============================================================
+   ```
+   *Exit code: `1` (CI Fails, PR blocked).*
+
+---
+
+### 9.3 Enforcing Branch Protection on `main`
+
+To make quality gating mandatory across all contributors:
+1. In the GitHub repository, navigate to **Settings** $\to$ **Branches**.
+2. Under **Branch protection rules**, click **Add branch protection rule**.
+3. Set **Branch name pattern** to `main`.
+4. Check **Require a pull request before merging**.
+5. Check **Require status checks to pass before merging**:
+   - Require status check: `Lint & Code Formatting` (`lint`).
+   - Require status check: `Unit Tests & Quality Gate` (`test`).
+6. Check **Require branches to be up to date before merging**.
+7. Click **Create / Save Changes**.
+
+---
+
+### 9.4 CI Status Badge
+The live CI workflow badge is integrated into `README.md`:
+```markdown
+[![CI](https://github.com/A7med-Foly/mlops-practitioner/actions/workflows/ci.yml/badge.svg)](https://github.com/A7med-Foly/mlops-practitioner/actions/workflows/ci.yml)
+```

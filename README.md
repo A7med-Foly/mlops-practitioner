@@ -1,9 +1,10 @@
 # NYC Taxi Trip Duration Prediction Service (`prodml`)
 
+[![CI](https://github.com/A7med-Foly/mlops-practitioner/actions/workflows/ci.yml/badge.svg)](https://github.com/A7med-Foly/mlops-practitioner/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.141+-009688.svg)](https://fastapi.tiangolo.com/)
 [![Docker Image](https://img.shields.io/badge/Docker-ahmedfoly%2Fprodml--api-2496ED.svg)](https://hub.docker.com/r/ahmedfoly/prodml-api)
-[![Coverage >= 70%](https://img.shields.io/badge/Coverage-80.19%25-brightgreen.svg)](https://pytest.org/)
+[![Coverage >= 70%](https://img.shields.io/badge/Coverage-80.33%25-brightgreen.svg)](https://pytest.org/)
 [![Code Style](https://img.shields.io/badge/Code%20Style-Black%20%26%20Ruff-black.svg)](https://github.com/psf/black)
 
 A production-grade machine learning service that predicts NYC taxi trip durations using a Random Forest regressor with scikit-learn and high-performance ONNX Runtime inference serving. Decomposed from an exploratory notebook into a clean, modular Python package, the service features structured JSON logging with UUID correlation tracking, strict Pydantic request validation, a multi-stage non-root Docker container, and an automated test suite enforcing a 70% coverage gate.

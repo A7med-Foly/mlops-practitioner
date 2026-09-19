@@ -48,6 +48,14 @@ dev = [
 addopts = "--cov=src/prodml --cov-fail-under=70"
 testpaths = ["tests"]
 
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+exclude = ["notebooks", ".venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
 
