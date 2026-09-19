@@ -444,3 +444,165 @@ The live CI workflow badge is integrated into `README.md`:
 ```markdown
 [![CI](https://github.com/A7med-Foly/mlops-practitioner/actions/workflows/ci.yml/badge.svg)](https://github.com/A7med-Foly/mlops-practitioner/actions/workflows/ci.yml)
 ```
+
+---
+
+## 10. Infrastructure as Code with Terraform
+
+### 10.1 Architecture & Resource Declarations (`infra/`)
+
+To guarantee environment reproducibility and treat infrastructure with the same rigor as application code, the complete local storage and tracking stack is codified in `infra/` using HashiCorp Terraform `v1.16.3` and the Docker provider (`kreuzwerker/docker ~> 3.0.2`).
+
+The infrastructure declares:
+1. **Bridge Network**: `prodml-network` enabling seamless DNS resolution across containers.
+2. **Persistent Volumes**: `postgres_data` and `minio_data` for database records and artifact blobs.
+3. **Container Services**:
+   - `mlflow-postgres`: PostgreSQL 16 Alpine metadata store on internal port `5432` / host port `5433` with automated healthchecks (`pg_isready`).
+   - `mlflow-minio`: MinIO S3-compatible object storage on internal/host ports `9000` (API) and `9001` (Web Console).
+   - `mlflow-minio-create-buckets`: Ephemeral MinIO Client (`quay.io/minio/mc:latest`) task configured with `must_run = false` that polls MinIO until healthy and idempotently provisions buckets (`mlflow` and `prodml-dvc`).
+   - `mlflow-server`: MLflow tracking server built from `docker/Dockerfile.mlflow` with PostgreSQL backend store and MinIO default artifact root (`s3://mlflow/`), exposed on host port `5000`.
+
+#### Clean File Structure (Zero Hardcoded Values):
+- [infra/versions.tf](file:///home/ahmed/data/mlops-practitioner/infra/versions.tf): Pins Terraform `>= 1.5.0` and `kreuzwerker/docker ~> 3.0.2`.
+- [infra/variables.tf](file:///home/ahmed/data/mlops-practitioner/infra/variables.tf): Parameterizes all container names, images, ports, passwords (marked `sensitive`), networks, and bucket names.
+- [infra/main.tf](file:///home/ahmed/data/mlops-practitioner/infra/main.tf): Resource definitions referencing only `var.*` variables.
+- [infra/outputs.tf](file:///home/ahmed/data/mlops-practitioner/infra/outputs.tf): Exposes `mlflow_tracking_uri`, `minio_endpoint_url`, `minio_console_url`, `created_buckets`, and `postgres_connection_string`.
+
+---
+
+### 10.2 Full Lifecycle Execution Loop
+
+#### 1. `terraform init`
+```text
+Initializing the backend...
+Initializing provider plugins...
+- Finding kreuzwerker/docker versions matching "~> 3.0.2"...
+- Installing kreuzwerker/docker v3.0.2...
+- Installed kreuzwerker/docker v3.0.2 (self-signed, key ID BD080C4571C6104C)
+
+Terraform has created a lock file .terraform.lock.hcl to record the provider selections.
+Terraform has been successfully initialized!
+```
+
+#### 2. `terraform fmt -check` & `terraform validate`
+```text
+Success! The configuration is valid.
+```
+
+#### 3. `terraform plan`
+```text
+Plan: 11 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + created_buckets            = [
+      + "mlflow",
+      + "prodml-dvc",
+    ]
+  + minio_console_url          = "http://localhost:9001"
+  + minio_endpoint_url         = "http://localhost:9000"
+  + mlflow_tracking_uri        = "http://localhost:5000"
+  + postgres_connection_string = (sensitive value)
+```
+
+#### 4. `terraform apply`
+```text
+Apply complete! Resources: 11 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+created_buckets = tolist([
+  "mlflow",
+  "prodml-dvc",
+])
+minio_console_url = "http://localhost:9001"
+minio_endpoint_url = "http://localhost:9000"
+mlflow_tracking_uri = "http://localhost:5000"
+postgres_connection_string = <sensitive>
+```
+
+---
+
+### 10.3 Acceptance Deliverable: Teardown and Reproduction from Scratch
+
+To prove that the infrastructure is truly reproducible from nothing in a single command, we executed `terraform destroy` followed immediately by `terraform apply`:
+
+#### `terraform destroy -auto-approve`:
+```text
+docker_container.mlflow: Destruction complete after 0s
+docker_image.mlflow: Destruction complete after 0s
+docker_container.minio_create_buckets: Destruction complete after 0s
+docker_container.postgres: Destruction complete after 0s
+docker_container.minio: Destruction complete after 0s
+docker_image.mc: Destruction complete after 0s
+docker_image.postgres: Destruction complete after 0s
+docker_image.minio: Destruction complete after 0s
+docker_volume.postgres_data: Destruction complete after 3s
+docker_volume.minio_data: Destruction complete after 3s
+docker_network.prodml_network: Destruction complete after 3s
+
+Destroy complete! Resources: 11 destroyed.
+```
+
+#### `terraform apply -auto-approve` (Re-creation from Scratch):
+```text
+docker_volume.minio_data: Creation complete after 0s [id=minio_data]
+docker_volume.postgres_data: Creation complete after 0s [id=postgres_data]
+docker_image.minio: Creation complete after 1s
+docker_image.mc: Creation complete after 2s
+docker_image.postgres: Creation complete after 2s
+docker_network.prodml_network: Creation complete after 2s [id=1242614c6583fdd578f194b1afe62d5cd9e7deff553d413ba51f65f836805c7f]
+docker_container.minio: Creation complete after 2s
+docker_container.postgres: Creation complete after 2s
+docker_container.minio_create_buckets: Creation complete after 3s
+docker_image.mlflow: Creation complete after 9s
+docker_container.mlflow: Creation complete after 1s
+
+Apply complete! Resources: 11 added, 0 changed, 0 destroyed.
+```
+
+#### Verification of Running Services:
+```text
+$ curl -sI http://localhost:5000 | head -n 1
+HTTP/1.1 200 OK
+
+$ curl -sI http://localhost:9000/minio/health/live | head -n 1
+HTTP/1.1 200 OK
+
+$ docker exec mlflow-postgres pg_isready -U mlflow -d mlflow
+/var/run/postgresql:5432 - accepting connections
+
+$ uv run python -m prodml.quality_gate
+============================================================
+           MODEL QUALITY GATE EVALUATION
+============================================================
+Candidate MAE  : 1.8271 min
+Baseline MAE   : 1.8271 min
+Observed Delta : +0.00% (Allowed limit: +5.0%)
+------------------------------------------------------------
+✅ QUALITY GATE PASSED: Model quality is acceptable (+0.00% <= +5.0%).
+============================================================
+```
+
+---
+
+### 10.4 State Security & Remote Backends Analysis
+
+#### 1. Why State Files Must NEVER Be Committed to Version Control
+1. **Plain-Text Secret Exposure**:
+   - Terraform state files (`terraform.tfstate`) store a complete, unmasked mapping of all managed resource properties in plain-text JSON.
+   - Even if variables are marked `sensitive = true` in HCL, Terraform persists the raw string in `.tfstate` to track changes across runs. This includes database master passwords (`mlflow`), object storage access/secret keys (`minioadmin`), API tokens, and private network endpoints.
+   - Committing `.tfstate` to Git permanently records these secrets in the commit history, exposing them to anyone with repository read access and risking severe credential compromise.
+2. **State Drift & Concurrency Collisions**:
+   - Git merge semantics are ill-suited for state tracking. If two developers pull code, apply different resources, and merge their respective `.tfstate` files, standard Git line-based merging cannot reconcile resource IDs, dependencies, and checksums.
+   - A corrupted or fragmented state file leads to orphan resources, duplicated cloud bills, or destructive deletions where Terraform destroys existing infrastructure during the next run.
+
+#### 2. What Remote Backends (e.g., S3 + DynamoDB, GCS, Terraform Cloud) Solve
+1. **Distributed State Locking**:
+   - Remote backends implement mutual exclusion locks (e.g., DynamoDB LockID table for AWS S3, or native object locks in GCS/Terraform Cloud).
+   - If one engineer or CI/CD pipeline is running `terraform apply`, all other concurrent executions are blocked with a `StateLockedError` until the active operation releases the lock. This completely prevents race conditions and state corruption.
+2. **Centralized Single Source of Truth**:
+   - Every contributor and automated deployment runner interacts with the exact same canonical state stored in high-durability object storage, eliminating local state divergence.
+3. **Encryption at Rest and in Transit**:
+   - State files in S3 or GCS can be secured with server-side encryption (AWS KMS / Google Cloud KMS) and enforced HTTPS/TLS transit encryption. Access is restricted using fine-grained IAM roles rather than repository-level permissions.
+4. **Automated State Versioning & Audit Logging**:
+   - Bucket versioning retains every snapshot of `.tfstate`. If an erroneous apply modifies or damages the state, administrators can roll back to any prior version. CloudTrail / Cloud Audit Logs maintain an immutable log of who modified what resource and when.
