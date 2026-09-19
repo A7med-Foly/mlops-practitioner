@@ -76,11 +76,9 @@ An Optuna hyperparameter optimization study was executed under a parent run (`xg
 
 The MLflow UI (`http://localhost:5000`) displays 15 total runs in the `nyc-taxi-duration` experiment, sorted by `metrics.mae ASC`.
 
-<!-- Placeholder for MLflow UI comparison view screenshot -->
-```markdown
 ![MLflow UI Run Comparison View](images/mlflow_runs_comparison.png)
-```
-*(Screenshot placeholder: Sort runs in experiment `nyc-taxi-duration` by `metrics.mae ASC` showing run name, MAE, RMSE, R2, framework, git commit, and data version tags).*
+
+*(Runs in experiment `nyc-taxi-duration` sorted by `metrics.mae ASC` showing run name, MAE, RMSE, R2, framework, git commit, and data version tags).*
 
 ---
 
