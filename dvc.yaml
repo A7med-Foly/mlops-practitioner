@@ -1,0 +1,71 @@
+stages:
+  prepare:
+    cmd: uv run python -m prodml.pipeline.prepare
+    deps:
+      - data/raw/green_tripdata.parquet
+      - src/prodml/data.py
+      - src/prodml/pipeline/prepare.py
+    params:
+      - prepare.min_duration
+      - prepare.max_duration_quantile
+      - prepare.min_distance
+      - prepare.test_size
+      - prepare.val_size
+      - prepare.random_state
+      - prepare.target_column
+      - prepare.pickup_column
+      - prepare.dropoff_column
+    outs:
+      - data/processed/train.parquet
+      - data/processed/val.parquet
+      - data/processed/test.parquet
+
+  featurize:
+    cmd: uv run python -m prodml.pipeline.featurize
+    deps:
+      - data/processed/train.parquet
+      - data/processed/val.parquet
+      - src/prodml/features.py
+      - src/prodml/pipeline/featurize.py
+    params:
+      - featurize.numerical_features
+      - featurize.categorical_features
+    outs:
+      - data/features/train.npz
+      - data/features/val.npz
+      - data/features/dv.pkl
+
+  train:
+    cmd: uv run python -m prodml.pipeline.train
+    deps:
+      - data/features/train.npz
+      - data/features/val.npz
+      - src/prodml/pipeline/lineage.py
+      - src/prodml/pipeline/train.py
+    params:
+      - train.model_family
+      - train.n_estimators
+      - train.max_depth
+      - train.learning_rate
+      - train.subsample
+      - train.colsample_bytree
+      - train.random_state
+    outs:
+      - models/dvc_model.joblib
+
+  evaluate:
+    cmd: uv run python -m prodml.pipeline.evaluate
+    deps:
+      - models/dvc_model.joblib
+      - data/features/val.npz
+      - src/prodml/pipeline/evaluate.py
+    params:
+      - evaluate.metrics
+    metrics:
+      - metrics.json:
+          cache: false
+    plots:
+      - plots/residuals.png:
+          cache: false
+      - plots/feature_importance.png:
+          cache: false

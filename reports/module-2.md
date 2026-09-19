@@ -5,6 +5,7 @@
 This report documents the implementation of centralized experiment tracking, multi-model benchmarking, and hyperparameter optimization for the NYC Green Taxi trip duration prediction service. All experiments are tracked using an MLflow Tracking Server backed by PostgreSQL for metadata and MinIO (S3-compatible) for artifact persistence.
 
 Three distinct model families were trained and evaluated on identical deterministic splits ($60\%$ Train, $20\%$ Validation, $20\%$ Test; seed $42$):
+
 1. **Linear Regression** (Ordinary Least Squares Baseline)
 2. **PyTorch MLP** (Multi-Layer Perceptron: $9 \to 64 \to 32 \to 1$, Adam optimizer)
 3. **XGBoost Regressor** (Gradient-boosted decision trees with autologging and a 10-trial Optuna nested sweep)
@@ -22,7 +23,8 @@ All models were evaluated on the identical $7,507$-row holdout validation split 
 | **XGBoost (Baseline)** | `xgboost-baseline` | `n_est=100`, `depth=6`, `lr=0.1`, `sub=0.8`, `col=0.8` | **1.8271** | **5.4446** | **0.7598** | 0.26s | 0.443 MB |
 | **XGBoost (Best Sweep Trial #7)** | `trial-7` | `n_est=150`, `depth=6`, `lr=0.089`, `sub=0.9`, `col=0.7` | 1.8742 | **5.4190** | **0.7621** | 0.38s | 0.648 MB |
 
-### Observations:
+### Observations
+
 - **Gradient Boosted Trees Dominance**: XGBoost achieves superior performance across all regression metrics, reducing MAE by over $54\%$ relative to Linear Regression ($1.83$ min vs. $4.03$ min).
 - **Deep Learning Efficiency**: The PyTorch MLP captures non-linear feature interactions ($R^2 = 0.6872$), substantially outperforming Linear Regression, but requires longer training duration on CPU ($11.45$s) compared to XGBoost ($0.26$s) without exceeding tree-based accuracy on tabular features.
 
@@ -48,14 +50,15 @@ We activated `mlflow.xgboost.autolog()` during the baseline XGBoost training run
 
 An Optuna hyperparameter optimization study was executed under a parent run (`xgboost-hyperparameter-sweep`), logging 10 nested trial runs.
 
-### Sweep Parameter Search Space:
+### Sweep Parameter Search Space
+
 - `n_estimators`: $[50, 150]$ (step $25$)
 - `max_depth`: $[3, 8]$
 - `learning_rate`: $[0.03, 0.2]$ (log scale)
 - `subsample`: $[0.6, 1.0]$ (step $0.1$)
 - `colsample_bytree`: $[0.6, 1.0]$ (step $0.1$)
 
-### Trial Results (Ranked by Validation MAE):
+### Trial Results (Ranked by Validation MAE)
 
 | Trial Number | MAE (min) | RMSE (min) | $R^2$ | `max_depth` | `n_estimators` | `learning_rate` | `subsample` | `colsample_bytree` |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -85,6 +88,7 @@ The MLflow UI (`http://localhost:5000`) displays 15 total runs in the `nyc-taxi-
 ## 6. Acceptance Check Answers (Direct from MLflow UI)
 
 From the MLflow UI alone:
+
 1. **Which hyperparameters produced the best MAE?**
    - **Run**: `xgboost-baseline` ($1.8271$ min) / `trial-7` ($1.8742$ min)
    - **Best Parameters**: `n_estimators=100`, `max_depth=6`, `learning_rate=0.1`, `subsample=0.8`, `colsample_bytree=0.8` (or `n_estimators=150`, `max_depth=6`, `learning_rate=0.089`, `subsample=0.9`, `colsample_bytree=0.7`).
@@ -98,14 +102,17 @@ From the MLflow UI alone:
 ## 7. Model Registry & The Promotion Lifecycle (Step 03)
 
 ### 7.1 Architecture & Registry Structure
-The MLflow Model Registry provides a centralized model governance store backed by PostgreSQL metadata and MinIO artifact storage. 
+
+The MLflow Model Registry provides a centralized model governance store backed by PostgreSQL metadata and MinIO artifact storage.
 
 Models are registered under the entity:
+
 ```text
 ride-duration-predictor
 ```
 
 ### 7.2 Deliberate Lifecycle Walkthrough
+
 1. **Candidate 1 (Best Run)**:
    - **Framework**: XGBoost Regressor (`n_estimators=100`, `max_depth=6`, `lr=0.1`)
    - **Validation MAE**: `1.8271` minutes
@@ -120,6 +127,7 @@ ride-duration-predictor
    - **Stage**: Left deliberately in stage `None` for contrast.
 
 ### 7.3 Decoupled Dynamic Loading (`prodml/predict.py`)
+
 Rather than coupling the serving API to hardcoded local filesystem paths (`models/baseline.onnx`), `DurationPredictor.load()` dynamically resolves model artifacts by lifecycle stage:
 
 ```python
@@ -129,9 +137,12 @@ model = mlflow.pyfunc.load_model("models:/ride-duration-predictor/Production")
 The underlying predictor detects MLflow `PyFuncModel` instances and formats incoming request features into ordered NumPy arrays/DataFrames matching the training feature schema.
 
 ### 7.4 Zero-Code Model Swapping Proof (Acceptance Check)
+
 To prove that model promotion requires **zero code changes and zero container rebuilds**:
+
 1. **Serving Version 1 (XGBoost in Production)**:
    - Queried `POST /predict` with sample trip (`trip_distance=3.5`, `fare_amount=15.0`, `total_amount=18.5`):
+
    ```json
    {
      "prediction": 10.125722885131836,
@@ -140,6 +151,7 @@ To prove that model promotion requires **zero code changes and zero container re
      "latency_ms": 22.21
    }
    ```
+
    **Prediction served: `10.13` minutes.**
 
 2. **Registry Stage Promotion**:
@@ -151,6 +163,7 @@ To prove that model promotion requires **zero code changes and zero container re
 
 4. **Serving Version 2 (Linear Regression in Production)**:
    - Re-sent the **exact same HTTP request** to `POST /predict`:
+
    ```json
    {
      "prediction": 14.745060920715332,
@@ -159,6 +172,7 @@ To prove that model promotion requires **zero code changes and zero container re
      "latency_ms": 128.53
    }
    ```
+
    **Prediction served: `14.75` minutes.**
 
 > [!IMPORTANT]
@@ -167,13 +181,15 @@ To prove that model promotion requires **zero code changes and zero container re
 ---
 
 ### 7.5 Automated Continuous Delivery Gate (`prodml/registry.py`)
+
 To remove manual clicks from the promotion lifecycle, `prodml.registry` implements automated promotion gating:
 
 ```python
 def promote_if_better(candidate_run_id: str, model_name: str = "ride-duration-predictor", metric: str = "mae") -> dict[str, Any]
 ```
 
-#### Gate Logic:
+#### Gate Logic
+
 - Queries the candidate run's validation metric.
 - Queries the current `Production` model's run metric.
 - If candidate improves the metric (e.g. candidate MAE $<$ production MAE):
@@ -185,6 +201,155 @@ def promote_if_better(candidate_run_id: str, model_name: str = "ride-duration-pr
   - Leaves current production version untouched.
   - Returns `promoted=False` (exit code 1).
 
-#### Verification of Gate Decisions:
+#### Verification of Gate Decisions
+
 - **Superior Candidate Promotion**: Candidate `100a7cf01b...` (MAE $1.8271$) beat Production v2 (MAE $4.0348$) $\to$ **PROMOTED** to Version 3 (`exit 0`).
 - **Inferior Candidate Rejection**: Candidate `f9a50a93...` (MAE $4.0348$) tested against Production v3 (MAE $1.8271$) $\to$ **REJECTED** (`exit 1`).
+
+---
+
+## 8. Data Versioning with DVC & Pipeline Automation (Step 04)
+
+### 8.1 DVC Initialization & MinIO Remote Setup
+
+DVC was installed via `uv add dvc dvc-s3` and initialized at the repository root. Storage remote `storage` was configured against the local MinIO S3-compatible service:
+
+- **S3 Endpoint**: `http://localhost:9000`
+- **Bucket**: `s3://prodml-dvc`
+- **Access Credentials**: `minioadmin` / `minioadmin`
+
+```ini
+[core]
+    remote = storage
+['remote "storage"']
+    url = s3://prodml-dvc
+    endpointurl = http://localhost:9000
+    access_key_id = minioadmin
+    secret_access_key = minioadmin
+```
+
+---
+
+### 8.2 Data Versioning & Rollback Verification (The Proof)
+
+To verify that DVC decoupled dataset tracking from Git while ensuring 100% reproducible rollback:
+
+1. **Version 1 Tracking**:
+   - Tracked raw taxi dataset: `data/raw/green_tripdata.parquet` ($44,921$ rows, $1,102,947$ bytes).
+   - Generated pointer: `data/raw/green_tripdata.parquet.dvc` (MD5: `c9341a1058bee6a0c5ce8e2123853c35`).
+   - Committed to Git (`adca3eb`) and pushed to MinIO: `dvc push`.
+2. **Version 2 Simulation**:
+   - Appended $5,079$ records to produce a $50,000$-row dataset ($1,297,763$ bytes).
+   - Tracked with DVC: generated MD5 `dd6cdd346ad472ddf589c9404cdaffcd`.
+   - Committed to Git (`b38204c`) and pushed to MinIO: `dvc push`.
+3. **Rollback Verification**:
+   - Checked out Git commit `adca3eb` (v1 commit).
+   - Observed: Git checked out the v1 `.dvc` pointer, but local workspace parquet still contained $50,000$ rows.
+   - Executed `dvc checkout`:
+
+      ```text
+     Applying changes: 1.00 [00:00, 157file/s]
+     M data/raw/green_tripdata.parquet
+      ```
+
+   - Verified row count: **reverted immediately to 44,921 rows** with MD5 `c9341a1058bee6a0c5ce8e2123853c35`.
+   - Restored working branch to canonical v1 baseline.
+
+---
+
+### 8.3 4-Stage Reproducible Pipeline Architecture
+
+The pipeline is formalized in `dvc.yaml` and parameterized via `params.yaml`, spanning four decoupled stages:
+
+```mermaid
+flowchart TD
+    Raw["data/raw/green_tripdata.parquet.dvc"] --> Prepare["Stage 1: prepare<br/>(clean & split)"]
+    Params["params.yaml"] -.-> Prepare
+    Prepare --> Processed["data/processed/<br/>train.parquet, val.parquet, test.parquet"]
+    Processed --> Featurize["Stage 2: featurize<br/>(encode & transform)"]
+    Params -.-> Featurize
+    Featurize --> Features["data/features/<br/>train.npz, val.npz, dv.pkl"]
+    Features --> Train["Stage 3: train<br/>(fit XGBoost & log MLflow)"]
+    Params -.-> Train
+    Train --> Model["models/dvc_model.joblib"]
+    Model --> Evaluate["Stage 4: evaluate<br/>(metrics & diagnostic plots)"]
+    Features --> Evaluate
+    Params -.-> Evaluate
+    Evaluate --> Metrics["metrics.json<br/>plots/residuals.png<br/>plots/feature_importance.png"]
+```
+
+#### Pipeline Stages Definition (`dvc.yaml`)
+
+1. **`prepare`**: Loads raw parquet, cleans invalid records and outliers, and deterministically splits into `train.parquet` ($22,521$ rows), `val.parquet` ($7,507$ rows), and `test.parquet` ($7,508$ rows).
+2. **`featurize`**: Converts clean partitions into numerical matrices using DictVectorizer and saves `train.npz`, `val.npz`, and `dv.pkl`.
+3. **`train`**: Fits XGBoost regressor using hyperparameter values from `params.yaml`, logs metrics and lineage to MLflow, and saves `models/dvc_model.joblib`.
+4. **`evaluate`**: Evaluates model performance on validation data, generates `metrics.json`, `plots/residuals.png`, and `plots/feature_importance.png`.
+
+---
+
+### 8.4 Caching & Partial Stage Invalidation Proof
+
+1. **Full Cache Hit (Unchanged Re-run)**:
+   Running `dvc repro` after a completed execution produces instant cache hits across all stages:
+
+   ```text
+   'data/raw/green_tripdata.parquet.dvc' didn't change, skipping
+   Stage 'prepare' didn't change, skipping
+   Stage 'featurize' didn't change, skipping
+   Stage 'train' didn't change, skipping
+   Stage 'evaluate' didn't change, skipping
+   Data and pipelines are up to date.
+   ```
+
+2. **Partial Invalidation (Hyperparameter Mutation)**:
+   Modified `learning_rate` in `params.yaml` from `0.1` $\to$ `0.05`:
+   - `prepare`: Dependencies and `prepare.*` parameters unchanged $\to$ **SKIPPED (cached)**.
+   - `featurize`: Inputs and `featurize.*` parameters unchanged $\to$ **SKIPPED (cached)**.
+   - `train`: Parameter `train.learning_rate` changed $\to$ **EXECUTED**.
+   - `evaluate`: Input dependency `models/dvc_model.joblib` changed $\to$ **EXECUTED**.
+
+```text
+'data/raw/green_tripdata.parquet.dvc' didn't change, skipping
+Stage 'prepare' didn't change, skipping
+Stage 'featurize' didn't change, skipping
+Running stage 'train':
+> uv run python -m prodml.pipeline.train
+Running stage 'evaluate':
+> uv run python -m prodml.pipeline.evaluate
+Updating lock file 'dvc.lock'
+```
+
+---
+
+### 8.5 Metrics Tracking & Difference (`dvc metrics`)
+
+Evaluation metrics are tracked in `metrics.json` without caching (`cache: false`), allowing git and DVC to track performance across iterations:
+
+| Metric | Baseline (`lr=0.1`) | Experiment (`lr=0.05`) | Delta (`dvc metrics diff`) |
+| :--- | :---: | :---: | :---: |
+| **MAE** | **1.8271** min | 1.9677 min | $+0.1406$ min |
+| **RMSE** | **5.4446** min | 5.4978 min | $+0.0532$ min |
+| **$R^2$** | **0.7598** | 0.7551 | $-0.0047$ |
+
+---
+
+### 8.6 Full Lineage Wiring (MLflow $\leftrightarrow$ DVC) & Acceptance Check
+
+To close the loop between data versioning and model registry/tracking, `prodml.pipeline.lineage` inspects `dvc.lock` and `.dvc` files to extract the exact dataset hash:
+
+```python
+mlflow.set_tag("dvc_data_hash", get_dvc_hash("data/processed"))
+```
+
+#### MLflow Run Lineage Tags (Run `414790fb761d4aa5848752a44cf75204`)
+
+- `dvc_data_hash`: `85a3a39366431b7e09a80987716e6b61`
+- `git_commit`: `182190cbdcadac357babb015ba0ab97d71ba4742`
+- `pipeline`: `dvc`
+
+> [!IMPORTANT]
+> **ACCEPTANCE CHECK PASSED**: Given only the MLflow Run ID (`414790fb761d4aa5848752a44cf75204`):
+>
+> 1. Recovered `dvc_data_hash` (`85a3a393...`) and `git_commit` (`182190cb...`) from the run tags.
+> 2. Located exact dataset split in `dvc.lock` and retrieved from MinIO storage via `dvc checkout`.
+> 3. Running `dvc repro` reproduces identical validation metrics: **MAE: 1.8271, RMSE: 5.4446, $R^2$: 0.7598**.

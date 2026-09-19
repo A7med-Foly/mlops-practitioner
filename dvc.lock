@@ -1,0 +1,153 @@
+schema: '2.0'
+stages:
+  prepare:
+    cmd: uv run python -m prodml.pipeline.prepare
+    deps:
+    - path: data/raw/green_tripdata.parquet
+      hash: md5
+      md5: c9341a1058bee6a0c5ce8e2123853c35
+      size: 1102947
+    - path: src/prodml/data.py
+      hash: md5
+      md5: 6e7920190894f11c886e329f6e8c9843
+      size: 5602
+    - path: src/prodml/pipeline/prepare.py
+      hash: md5
+      md5: ddd5be3934a893f3245bec6ca2a49f39
+      size: 2946
+    params:
+      params.yaml:
+        prepare.dropoff_column: lpep_dropoff_datetime
+        prepare.max_duration_quantile: 0.995
+        prepare.min_distance: 0.0
+        prepare.min_duration: 0.0
+        prepare.pickup_column: lpep_pickup_datetime
+        prepare.random_state: 42
+        prepare.target_column: trip_duration
+        prepare.test_size: 0.2
+        prepare.val_size: 0.25
+    outs:
+    - path: data/processed/test.parquet
+      hash: md5
+      md5: 85a3a39366431b7e09a80987716e6b61
+      size: 252487
+    - path: data/processed/train.parquet
+      hash: md5
+      md5: 34ff45b384d37e6b61c253da8b19d636
+      size: 706345
+    - path: data/processed/val.parquet
+      hash: md5
+      md5: e388ca587c77ee09eb1929a59ebebbab
+      size: 252241
+  featurize:
+    cmd: uv run python -m prodml.pipeline.featurize
+    deps:
+    - path: data/processed/train.parquet
+      hash: md5
+      md5: 34ff45b384d37e6b61c253da8b19d636
+      size: 706345
+    - path: data/processed/val.parquet
+      hash: md5
+      md5: e388ca587c77ee09eb1929a59ebebbab
+      size: 252241
+    - path: src/prodml/features.py
+      hash: md5
+      md5: bf01780b6c7f2e23206f872eea0587d6
+      size: 6373
+    - path: src/prodml/pipeline/featurize.py
+      hash: md5
+      md5: 143aa41dd35a85d563d2a1b0dd3e535c
+      size: 2905
+    params:
+      params.yaml:
+        featurize.categorical_features:
+        - PULocationID
+        - DOLocationID
+        - RatecodeID
+        - payment_type
+        - trip_type
+        - congestion_surcharge
+        featurize.numerical_features:
+        - trip_distance
+        - fare_amount
+        - total_amount
+    outs:
+    - path: data/features/dv.pkl
+      hash: md5
+      md5: dd32d10d275cba7081d854ef0a317b0f
+      size: 419
+    - path: data/features/train.npz
+      hash: md5
+      md5: 768637c0754ba92b0eb0f1b40373a28c
+      size: 230435
+    - path: data/features/val.npz
+      hash: md5
+      md5: 467f3c938730a1e5de83afa8ecc139e4
+      size: 78750
+  train:
+    cmd: uv run python -m prodml.pipeline.train
+    deps:
+    - path: data/features/train.npz
+      hash: md5
+      md5: 768637c0754ba92b0eb0f1b40373a28c
+      size: 230435
+    - path: data/features/val.npz
+      hash: md5
+      md5: 467f3c938730a1e5de83afa8ecc139e4
+      size: 78750
+    - path: src/prodml/pipeline/lineage.py
+      hash: md5
+      md5: dcd78641473694257dfce9308944a61d
+      size: 3391
+    - path: src/prodml/pipeline/train.py
+      hash: md5
+      md5: 8cfd846ecf191ec4fc478e2c68fd8e8a
+      size: 4261
+    params:
+      params.yaml:
+        train.colsample_bytree: 0.8
+        train.learning_rate: 0.1
+        train.max_depth: 6
+        train.model_family: xgboost
+        train.n_estimators: 100
+        train.random_state: 42
+        train.subsample: 0.8
+    outs:
+    - path: models/dvc_model.joblib
+      hash: md5
+      md5: 186fdb1af17104e9a8e4f71b473e4b25
+      size: 393907
+  evaluate:
+    cmd: uv run python -m prodml.pipeline.evaluate
+    deps:
+    - path: data/features/val.npz
+      hash: md5
+      md5: 467f3c938730a1e5de83afa8ecc139e4
+      size: 78750
+    - path: models/dvc_model.joblib
+      hash: md5
+      md5: 186fdb1af17104e9a8e4f71b473e4b25
+      size: 393907
+    - path: src/prodml/pipeline/evaluate.py
+      hash: md5
+      md5: 2a4a9e6d47f53a74d1a14ca545f1a289
+      size: 4531
+    params:
+      params.yaml:
+        evaluate.metrics:
+        - mae
+        - rmse
+        - r2
+    outs:
+    - path: metrics.json
+      hash: md5
+      md5: db82ca239945e6e79e16e9286657f3eb
+      size: 53
+    - path: plots/feature_importance.png
+      hash: md5
+      md5: 8881f377c64008738218c9a8b74d089a
+      size: 54400
+    - path: plots/residuals.png
+      hash: md5
+      md5: 89f86447ef533eaee7a05d1bfc54685e
+      size: 104143
