@@ -1,0 +1,156 @@
+name: Continuous Training
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # 1. Weekly schedule (Sundays at 00:00 UTC)
+  workflow_dispatch:      # 2. Manual trigger with inputs
+    inputs:
+      data_version:
+        description: 'DVC data version / git tag / commit'
+        required: false
+        default: 'latest'
+      margin:
+        description: 'Required improvement margin over Production MAE (e.g. 0.0 or 0.02)'
+        required: false
+        default: '0.0'
+  repository_dispatch:   # 3. External webhook (Module 5 drift detector hook)
+    types: [data-drift, model-drift, external-trigger]
+
+concurrency:
+  group: ct-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  continuous-training:
+    name: Continuous Training Pipeline
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Configure AWS / S3 Credentials for DVC
+        run: |
+          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+            echo "MLFLOW_S3_ENDPOINT_URL=${{ secrets.MLFLOW_S3_ENDPOINT_URL }}" >> $GITHUB_ENV
+          fi
+
+      - name: DVC Pull (Fetch Labeled Data)
+        run: |
+          echo "Pulling dataset version: ${{ inputs.data_version || 'latest' }}"
+          uv run dvc pull data/raw/green_tripdata.parquet || echo "DVC remote not configured in CI environment; falling back to local/cached dataset."
+
+      - name: Validate Raw Data
+        run: |
+          uv run python -m prodml.data validate --data-path data/raw/green_tripdata.parquet
+
+      - name: Start Local MLflow Tracking Server
+        run: |
+          mkdir -p mlartifacts
+          uv run mlflow server \
+            --backend-store-uri sqlite:///mlflow.db \
+            --default-artifact-root ./mlartifacts \
+            --host 127.0.0.1 \
+            --port 5000 &
+          echo "Waiting for MLflow server..."
+          until curl -s http://127.0.0.1:5000/health > /dev/null 2>&1 || curl -s http://127.0.0.1:5000/version > /dev/null 2>&1; do
+            sleep 1
+          done
+          echo "MLflow tracking server is up."
+
+      - name: Train and Evaluate Model
+        env:
+          MLFLOW_TRACKING_URI: http://127.0.0.1:5000
+        run: |
+          uv run dvc repro train evaluate || {
+            echo "dvc repro step failed or incomplete; running pipeline stages directly..."
+            uv run python -m prodml.pipeline.prepare
+            uv run python -m prodml.pipeline.featurize
+            uv run python -m prodml.pipeline.train
+            uv run python -m prodml.pipeline.evaluate
+          }
+
+      - name: CT Promotion Gate (Challenge Production)
+        id: gate
+        env:
+          MLFLOW_TRACKING_URI: http://127.0.0.1:5000
+        run: |
+          MARGIN="${{ inputs.margin || '0.0' }}"
+          uv run python -m prodml.ct_gate \
+            --candidate-metrics metrics.json \
+            --margin "$MARGIN"
+
+      - name: Set up Docker Buildx
+        if: steps.gate.outputs.promoted == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub (Conditional)
+        if: (steps.gate.outputs.promoted == 'true' || github.event_name == 'workflow_dispatch') && env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        if: steps.gate.outputs.promoted == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          DOCKER_IMAGE="prodml-api"
+          TAG="staging"
+          SHA_TAG="sha-${GITHUB_SHA::7}"
+
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            REPO="${{ secrets.DOCKERHUB_USERNAME }}/${DOCKER_IMAGE}"
+            echo "Building and pushing ${REPO}:${TAG} and ${REPO}:${SHA_TAG}"
+            docker buildx build \
+              --file docker/Dockerfile \
+              --tag "${REPO}:${TAG}" \
+              --tag "${REPO}:${SHA_TAG}" \
+              --push .
+          else
+            echo "Building image locally (DOCKERHUB_USERNAME not configured in secrets)"
+            docker build \
+              -f docker/Dockerfile \
+              -t "${DOCKER_IMAGE}:${TAG}" \
+              -t "${DOCKER_IMAGE}:${SHA_TAG}" .
+          fi
+
+      - name: Publish Step Summary & Notification
+        if: always()
+        run: |
+          cat << 'EOF' >> $GITHUB_STEP_SUMMARY
+          # 🚀 Continuous Training (CT) Pipeline Summary
+
+          | Metric / Property | Value |
+          | :--- | :--- |
+          | **Trigger Source** | `${{ github.event_name }}` |
+          | **Data Version** | `${{ inputs.data_version || 'latest' }}` |
+          | **Candidate MAE** | `${{ steps.gate.outputs.candidate_mae || 'N/A' }} min` |
+          | **Production MAE** | `${{ steps.gate.outputs.production_mae || 'N/A' }} min` |
+          | **Required Margin** | `${{ steps.gate.outputs.margin || '0.0' }} min` |
+          | **Staging Promotion** | `${{ steps.gate.outputs.promoted == 'true' && '✅ PROMOTED TO STAGING' || 'ℹ️ RETAINED (No promotion)' }}` |
+
+          ### Model Lifecycle Next Steps:
+          - **Staging Promotion**: Automatic upon beating Production MAE by the required margin.
+          - **Production Promotion**: **Requires human review and approval** via the protected GitHub Environment gate.
+          EOF

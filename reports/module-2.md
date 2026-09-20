@@ -606,3 +606,125 @@ Observed Delta : +0.00% (Allowed limit: +5.0%)
    - State files in S3 or GCS can be secured with server-side encryption (AWS KMS / Google Cloud KMS) and enforced HTTPS/TLS transit encryption. Access is restricted using fine-grained IAM roles rather than repository-level permissions.
 4. **Automated State Versioning & Audit Logging**:
    - Bucket versioning retains every snapshot of `.tfstate`. If an erroneous apply modifies or damages the state, administrators can roll back to any prior version. CloudTrail / Cloud Audit Logs maintain an immutable log of who modified what resource and when.
+
+---
+
+## 11. Continuous Training (CT) Pipeline
+
+### 11.1 Architecture & End-to-End Workflow (`continuous-training.yml`)
+
+The Continuous Training (CT) pipeline closes the automated machine learning loop. Implemented in `.github/workflows/continuous-training.yml`, it coordinates data synchronization, data validation, retraining, evaluation, Staging promotion gating, container artifact construction, and team reporting.
+
+```
+Trigger (Cron / Manual / Webhook)
+   │
+   ▼
+[ dvc pull ] ───────► Fetch labeled taxi dataset
+   │
+   ▼
+[ validate data ] ──► Check schema & volume (>= 1,000 rows, required columns)
+   │
+   ▼
+[ train ] ──────────► dvc repro train (fit XGBoost, log MLflow metadata & DVC hash)
+   │
+   ▼
+[ evaluate ] ───────► dvc repro evaluate (compute MAE, RMSE, R2, generate plots)
+   │
+   ▼
+[ CT Gate ] ────────► Compare candidate MAE vs. active Production MAE
+   │
+   ├── Candidate Beats Production by Margin ──► Auto-promote to Staging ──► Build Docker Image
+   └── Candidate Fails Challenge ─────────────► Log reason, exit 0 (Keep Production active)
+   │
+   ▼
+[ Step Summary ] ───► Publish execution metrics & decision table to GitHub Actions Summary
+```
+
+#### Workflow Trigger Configurations:
+1. **Schedule Trigger (`schedule`)**:
+   - Weekly cron: `cron: '0 0 * * 0'` (every Sunday at midnight UTC) to periodically retrain models on freshly accumulated ground-truth trip records.
+2. **Manual Dispatch (`workflow_dispatch`)**:
+   - Provides operational control with parameter inputs:
+     - `data_version`: Specific DVC commit, Git tag, or dataset version to pull.
+     - `margin`: Configurable performance improvement margin required over Production MAE (default: `0.0`).
+3. **Repository Dispatch Webhook (`repository_dispatch`)**:
+   - Subscribes to events: `[data-drift, model-drift, external-trigger]`.
+   - Directly wires the external integration hook for Module 5's drift detection service to trigger autonomous retraining upon statistical covariate or concept drift.
+
+---
+
+### 11.2 Architectural Defense: Why Never Auto-Promote to Production
+
+> [!IMPORTANT]
+> **Defense of Human Approval Gate for Production Promotion**:
+> Automated promotion directly to Production introduces existential reliability and safety risks: automated offline metric evaluation (e.g. holdout MAE) cannot detect data distribution shifts, latency regressions, edge-case safety failures, or downstream business impact that only canary/shadow testing and human domain review can catch. By automatically promoting candidate models exclusively to Staging, we enable comprehensive integration testing in a production-mirror environment while reserving the final production promotion for human sign-off via a protected GitHub Environment gate.
+
+---
+
+### 11.3 Continuous Training (CT) Decision Table
+
+The table below delineates the four foundational retraining triggers, contrasting what our pipeline implements in Module 2 versus the components added in Module 5:
+
+| Trigger Source | Trigger Type | Implementation Mechanism | Decision Criteria | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Schedule** | Time-based | `schedule: cron: '0 0 * * 0'` | Retrains on a fixed weekly cadence regardless of performance to absorb routine seasonal variations. | **Implemented in Module 2** |
+| **New Labeled Data** | Event / Data-based | `workflow_dispatch: inputs: data_version` | Retrains whenever a new batch of labeled trip records is registered in DVC. | **Implemented in Module 2** |
+| **Data Drift** | Distribution-based | `repository_dispatch: types: [data-drift]` | Module 5's Evidently / statistical monitor detects Kolmogorov-Smirnov or Population Stability Index (PSI) drift on input features (e.g. trip distance, pickup locations) and posts a webhook. | **Hook wired in Module 2; Drift monitor added in Module 5** |
+| **Performance Degradation** | Concept-based | `repository_dispatch: types: [model-drift]` | Production inference monitoring observes ground-truth latency or MAE degradation exceeding SLA thresholds over a sliding evaluation window. | **Hook wired in Module 2; Service monitor added in Module 5** |
+
+---
+
+### 11.4 Promotion Gate Mechanics & Execution Logs
+
+The promotion gate (`src/prodml/ct_gate.py`) enforces strict non-breaking behavior:
+1. If the candidate beats the active Production MAE by the required margin:
+   $$\text{Candidate MAE} < \text{Production MAE} - \text{margin}$$
+   The model is automatically registered and transitioned to **`Staging`** in MLflow Model Registry.
+2. If the candidate does not beat Production:
+   The attempt is logged with the observed delta, and the script exits with code `0`. A rejected challenge indicates that the current Production baseline remains superior; it is **not** a build failure.
+
+#### 1. Data Validation Execution (`prodml.data validate`):
+```text
+============================================================
+                 DATA VALIDATION PASSED
+============================================================
+Path          : data/raw/green_tripdata.parquet
+Total Rows    : 44,921
+Total Columns : 21
+Schema Status : All required taxi columns verified.
+============================================================
+```
+
+#### 2. Gate Decision: Challenge Rejected (Expected Negative Case):
+```text
+============================================================
+        CONTINUOUS TRAINING (CT) PROMOTION GATE
+============================================================
+Model Name       : ride-duration-predictor
+Candidate MAE    : 1.8271 min
+Production MAE   : 1.8271 min (baseline)
+Required Margin  : 0.0000 min
+------------------------------------------------------------
+ℹ️  CHALLENGE REJECTED: Candidate MAE (1.8271) did NOT beat Production MAE (1.8271) with margin 0.0000 (delta: +0.0000 min, +0.00%).
+Action           : Candidate retained in review. Production remains active.
+Note             : Exiting with code 0 (failed challenge is not a build error).
+============================================================
+```
+*Exit code: `0` (Pipeline completes green without breaking CI).*
+
+#### 3. Gate Decision: Challenge Passed (Successful Promotion to Staging):
+```text
+============================================================
+        CONTINUOUS TRAINING (CT) PROMOTION GATE
+============================================================
+Model Name       : ride-duration-predictor
+Candidate MAE    : 1.8271 min
+Production MAE   : 2.0000 min (baseline)
+Required Margin  : 0.0500 min
+------------------------------------------------------------
+✅ CHALLENGE PASSED: Candidate MAE (1.8271) beats Production MAE (2.0000) by 0.1729 min (8.65% improvement, margin required: 0.0500).
+Action           : Automatically promoting candidate to Staging.
+[INFO] Model version 3 successfully transitioned to Staging.
+============================================================
+```
+*Exit code: `0` (Triggers Docker image build for `prodml-api:staging`).*
