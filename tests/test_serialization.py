@@ -3,6 +3,7 @@
 import pickle
 import numpy as np
 import onnxruntime as ort
+import pytest
 
 from prodml.config import get_settings
 from prodml.data import clean_data, load_data, split_data
@@ -15,6 +16,11 @@ def test_pickle_onnx_numerical_parity():
     settings = get_settings()
     pkl_path = settings.models_dir / "baseline.pkl"
     onnx_path = settings.models_dir / "baseline.onnx"
+
+    if not pkl_path.exists() or not settings.data_path.exists():
+        pytest.skip(
+            "Local model artifact baseline.pkl or dataset not present in CI checkout"
+        )
 
     # Ensure ONNX model exists
     if not onnx_path.exists():

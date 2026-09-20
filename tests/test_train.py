@@ -83,11 +83,18 @@ def synthetic_data():
     return X_train, y_train, X_val, y_val
 
 
-def test_train_linear_regression(synthetic_data, tmp_path: Path, monkeypatch):
+@pytest.fixture(autouse=True)
+def isolate_mlflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Isolate MLflow runs to a temporary SQLite tracking store for testing."""
+    tracking_uri = f"sqlite:///{tmp_path}/mlflow.db"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
+    mlflow.set_tracking_uri(tracking_uri)
+    monkeypatch.setattr(mlflow, "set_tracking_uri", lambda uri: None)
+
+
+def test_train_linear_regression(synthetic_data, tmp_path: Path):
     X_train, y_train, X_val, y_val = synthetic_data
     settings = Settings()
-    # Use local file store for testing mlflow logging
-    monkeypatch.setattr(mlflow, "set_tracking_uri", lambda uri: None)
 
     metrics = train_linear_regression(
         X_train,

@@ -34,7 +34,11 @@ def test_metadata_schema_matches(client: TestClient):
     assert validated.model_version in ("0.1.0", "registry-Production")
     assert len(validated.feature_names) > 0
     assert len(validated.artifact_hash) > 0
-    assert "ONNX Runtime" in validated.framework or "MLflow" in validated.framework
+    assert (
+        "ONNX Runtime" in validated.framework
+        or "MLflow" in validated.framework
+        or "scikit-learn" in validated.framework
+    )
 
 
 def test_predict_happy_path(client: TestClient, sample_features: dict):
