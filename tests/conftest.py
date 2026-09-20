@@ -1,13 +1,19 @@
 """Pytest fixtures for prodml test suite."""
 
+import os
 import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from prodml.api.main import app
+from prodml.api.main import app, compute_model_metadata
+from prodml.config import get_settings
 from prodml.predict import DurationPredictor
 from prodml.train import create_model, train_pipeline
+
+# Ensure any accidental network requests to MLflow fail immediately in test runs
+os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = "2"
+os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "0"
 
 
 @pytest.fixture
@@ -56,11 +62,21 @@ def trained_model() -> DurationPredictor:
 
     model = create_model("random_forest", n_estimators=10, random_state=42)
     pipeline = train_pipeline(X_records, y_durations, model=model)
-    return DurationPredictor(model=pipeline)
+    return DurationPredictor(
+        model=pipeline,
+        model_uri="models:/ride-duration-predictor/Production",
+    )
 
 
 @pytest.fixture
-def client():
-    """FastAPI TestClient fixture with lifespan execution."""
+def client(trained_model: DurationPredictor, monkeypatch: pytest.MonkeyPatch):
+    """FastAPI TestClient fixture with lifespan execution and mocked model loading."""
+    monkeypatch.setattr(
+        DurationPredictor, "load", lambda *args, **kwargs: trained_model
+    )
     with TestClient(app) as test_client:
+        test_client.app.state.predictor = trained_model
+        test_client.app.state.metadata = compute_model_metadata(
+            get_settings(), trained_model
+        )
         yield test_client

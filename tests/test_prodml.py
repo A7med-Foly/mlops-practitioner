@@ -41,6 +41,20 @@ class TestConfig(unittest.TestCase):
             del os.environ["PRODML_SERVER_PORT"]
             del os.environ["PRODML_N_ESTIMATORS"]
 
+    def test_mlflow_settings(self):
+        settings = Settings()
+        self.assertEqual(settings.mlflow_tracking_uri, "http://localhost:5000")
+        self.assertEqual(settings.mlflow_experiment_name, "nyc-taxi-duration")
+
+        os.environ["MLFLOW_TRACKING_URI"] = "http://remote-server:5000"
+        try:
+            custom_settings = Settings()
+            self.assertEqual(
+                custom_settings.mlflow_tracking_uri, "http://remote-server:5000"
+            )
+        finally:
+            del os.environ["MLFLOW_TRACKING_URI"]
+
 
 class TestDecorators(unittest.TestCase):
     """Test custom decorators."""

@@ -1,0 +1,38 @@
+prepare:
+  min_duration: 0.0
+  max_duration_quantile: 0.995
+  min_distance: 0.0
+  test_size: 0.2
+  val_size: 0.25
+  random_state: 42
+  target_column: trip_duration
+  pickup_column: lpep_pickup_datetime
+  dropoff_column: lpep_dropoff_datetime
+
+featurize:
+  numerical_features:
+    - trip_distance
+    - fare_amount
+    - total_amount
+  categorical_features:
+    - PULocationID
+    - DOLocationID
+    - RatecodeID
+    - payment_type
+    - trip_type
+    - congestion_surcharge
+
+train:
+  model_family: xgboost
+  n_estimators: 100
+  max_depth: 6
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+
+evaluate:
+  metrics:
+    - mae
+    - rmse
+    - r2

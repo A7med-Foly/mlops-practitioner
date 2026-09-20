@@ -1,8 +1,14 @@
+FROM ghcr.io/astral-sh/uv:latest AS uv_bin
+
 FROM python:3.12-slim AS builder
+COPY --from=uv_bin /uv /bin/uv
 WORKDIR /build
-COPY pyproject.toml ./
+
+COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir --prefix=/install .
+
+# Install into /install using uv with pytorch-cpu wheel resolution
+RUN uv pip install --system --prefix=/install --no-cache .
 
 FROM python:3.12-slim AS runtime
 RUN useradd --create-home --uid 1000 appuser

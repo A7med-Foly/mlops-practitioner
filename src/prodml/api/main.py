@@ -60,16 +60,6 @@ def compute_model_metadata(
     """Extract metadata, feature names, framework, and hash from model artifact."""
     model_path = settings.model_path
 
-    # Compute hash
-    artifact_hash = compute_artifact_hash(model_path)
-
-    # Compute training timestamp from file mtime
-    if model_path.exists():
-        mtime = model_path.stat().st_mtime
-        training_date = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-    else:
-        training_date = datetime.now(timezone.utc).isoformat()
-
     # Extract feature names
     if predictor and getattr(predictor, "feature_names", None):
         feature_names = list(predictor.feature_names)
@@ -79,11 +69,28 @@ def compute_model_metadata(
     # Determine framework dynamically
     if predictor and getattr(predictor, "is_onnx", False):
         framework = f"ONNX Runtime {ort.__version__}"
+    elif predictor and getattr(predictor, "is_pyfunc", False):
+        framework = "MLflow PyFunc (ride-duration-predictor)"
     else:
         framework = f"scikit-learn {sklearn.__version__}"
 
+    model_version = "0.1.0"
+    if predictor and getattr(predictor, "model_uri", None):
+        model_uri = str(predictor.model_uri)
+        artifact_hash = hashlib.sha256(model_uri.encode()).hexdigest()
+    elif model_path.exists():
+        artifact_hash = compute_artifact_hash(model_path)
+    else:
+        artifact_hash = "artifact-not-found"
+
+    if model_path.exists():
+        mtime = model_path.stat().st_mtime
+        training_date = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    else:
+        training_date = datetime.now(timezone.utc).isoformat()
+
     return {
-        "model_version": "0.1.0",
+        "model_version": model_version,
         "training_date": training_date,
         "feature_names": feature_names,
         "framework": framework,
@@ -99,15 +106,30 @@ async def lifespan(app: FastAPI):
 
     logger.info("Initializing application and loading model into memory...")
     try:
-        predictor = DurationPredictor.load(settings.model_path)
+        predictor = DurationPredictor.load(settings.model_uri)
         metadata = compute_model_metadata(settings, predictor)
         app.state.predictor = predictor
         app.state.metadata = metadata
-        logger.info("Model loaded successfully into app.state.predictor.")
+        logger.info(
+            "Model loaded successfully into app.state.predictor from %s",
+            predictor.model_uri,
+        )
     except Exception as exc:
-        logger.error("Failed to load model during startup: %s", exc)
-        app.state.predictor = None
-        app.state.metadata = {}
+        logger.warning(
+            "Primary model load failed: %s. Attempting fallback to %s",
+            exc,
+            settings.model_path,
+        )
+        try:
+            predictor = DurationPredictor.load(settings.model_path)
+            metadata = compute_model_metadata(settings, predictor)
+            app.state.predictor = predictor
+            app.state.metadata = metadata
+            logger.info("Fallback model loaded successfully.")
+        except Exception as err:
+            logger.error("Failed to load model during startup: %s", err)
+            app.state.predictor = None
+            app.state.metadata = {}
 
     yield
 
@@ -215,10 +237,16 @@ async def health_check():
             },
         )
 
+    active_location = (
+        getattr(predictor, "model_uri", None) or str(settings.model_uri)
+        if predictor
+        else str(settings.model_path)
+    )
+
     return HealthResponse(
         status="healthy",
         model_loaded=True,
-        model_path=str(settings.model_path),
+        model_path=str(active_location),
     )
 
 

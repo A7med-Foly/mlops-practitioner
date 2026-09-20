@@ -4,7 +4,9 @@ Handles loading Parquet files, filtering outliers and missing values,
 calculating trip durations, and splitting datasets for training, validation, and testing.
 """
 
+import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -162,3 +164,103 @@ def split_data(
     )
 
     return X_train, X_val, X_test, y_train, y_val, y_test
+
+
+REQUIRED_RAW_COLUMNS = [
+    "lpep_pickup_datetime",
+    "lpep_dropoff_datetime",
+    "PULocationID",
+    "DOLocationID",
+    "trip_distance",
+]
+
+
+def validate_raw_data(
+    data_path: Path | str | None = None,
+    min_rows: int = 1000,
+) -> dict[str, Any]:
+    """Validate raw trip data schema, minimum record volume, and data sanity.
+
+    Args:
+        data_path: Path to raw Parquet file. Defaults to configured data path.
+        min_rows: Minimum expected row count for training.
+
+    Returns:
+        Summary dict containing validation metrics.
+
+    Raises:
+        FileNotFoundError: If dataset does not exist.
+        ValueError: If schema or record volume constraints fail.
+    """
+    df = load_data(data_path)
+    total_rows = len(df)
+
+    if total_rows < min_rows:
+        raise ValueError(
+            f"Data validation failed: dataset has {total_rows} rows, expected at least {min_rows}."
+        )
+
+    missing_cols = [col for col in REQUIRED_RAW_COLUMNS if col not in df.columns]
+    if missing_cols:
+        raise ValueError(
+            f"Data validation failed: missing required schema columns {missing_cols}. "
+            f"Present columns: {list(df.columns)}"
+        )
+
+    # Basic sanity checks on distances and timestamps
+    valid_distances = (df["trip_distance"] >= 0).all()
+    if not valid_distances:
+        raise ValueError("Data validation failed: negative trip distances detected.")
+
+    return {
+        "status": "valid",
+        "rows": total_rows,
+        "columns": len(df.columns),
+        "required_columns_present": True,
+        "data_path": str(data_path),
+    }
+
+
+def main() -> None:
+    """CLI entrypoint for data operations."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ProdML Data Utilities")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate raw dataset schema and constraints"
+    )
+    validate_parser.add_argument(
+        "--data-path",
+        type=str,
+        default="data/raw/green_tripdata.parquet",
+        help="Path to raw dataset",
+    )
+    validate_parser.add_argument(
+        "--min-rows",
+        type=int,
+        default=1000,
+        help="Minimum required row count",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "validate":
+        try:
+            result = validate_raw_data(data_path=args.data_path, min_rows=args.min_rows)
+            print("=" * 60)
+            print("                 DATA VALIDATION PASSED")
+            print("=" * 60)
+            print(f"Path          : {result['data_path']}")
+            print(f"Total Rows    : {result['rows']:,}")
+            print(f"Total Columns : {result['columns']}")
+            print("Schema Status : All required taxi columns verified.")
+            print("=" * 60)
+        except Exception as exc:
+            print(f"❌ DATA VALIDATION FAILED: {exc}")
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

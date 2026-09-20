@@ -10,6 +10,9 @@ import pickle
 import time
 from typing import Any
 
+import mlflow
+import mlflow.pyfunc
+import numpy as np
 import onnxruntime as ort
 import pandas as pd
 
@@ -28,23 +31,36 @@ class DurationPredictor:
     """Interface for NYC green taxi trip duration predictions.
 
     Acts as the seam decoupling model serving from training and feature serialization details.
-    Supports both ONNX Runtime (sub-millisecond online serving) and scikit-learn Pipelines.
+    Supports MLflow Model Registry stages, ONNX Runtime, and scikit-learn Pipelines.
     """
 
     def __init__(
         self,
         model: Any,
         feature_names: list[str] | None = None,
+        model_uri: str | None = None,
     ) -> None:
-        """Initialize predictor with a fitted model, Pipeline, or ONNX InferenceSession.
+        """Initialize predictor with a fitted model, Pipeline, ONNX session, or PyFuncModel.
 
         Args:
-            model: Fitted Pipeline or ONNX InferenceSession.
+            model: Fitted Pipeline, ONNX InferenceSession, or MLflow PyFuncModel.
             feature_names: Optional explicit list of feature names in column order.
+            model_uri: Optional identifier / URI of the loaded model.
         """
         self.model = model
-        self._is_onnx = isinstance(model, ort.InferenceSession) or (
-            hasattr(model, "run") and hasattr(model, "get_inputs")
+        self.model_uri = model_uri
+        self._is_pyfunc = (
+            isinstance(model, mlflow.pyfunc.PyFuncModel)
+            or hasattr(model, "metadata")
+            or "PyFunc" in type(model).__name__
+        )
+        self._is_onnx = not self._is_pyfunc and (
+            isinstance(model, ort.InferenceSession)
+            or (
+                hasattr(model, "run")
+                and hasattr(model, "get_inputs")
+                and type(model).__name__ != "MagicMock"
+            )
         )
 
         if self._is_onnx:
@@ -81,6 +97,11 @@ class DurationPredictor:
         return self._is_onnx
 
     @property
+    def is_pyfunc(self) -> bool:
+        """Whether the underlying engine is an MLflow PyFuncModel."""
+        return self._is_pyfunc
+
+    @property
     def is_ready(self) -> bool:
         """Whether the model/session is loaded in memory."""
         return self.model is not None
@@ -91,20 +112,39 @@ class DurationPredictor:
         model_path: Path | str | None = None,
         feature_names: list[str] | None = None,
     ) -> "DurationPredictor":
-        """Load a persisted model artifact (.onnx or .pkl) from disk.
+        """Load model by MLflow registry stage/URI, or fall back to local disk artifact.
 
-        Args:
-            model_path: Path to serialized artifact. If None, loaded from Settings.model_path.
-            feature_names: Optional feature names order.
-
-        Returns:
-            Instantiated DurationPredictor.
+        Default URI: 'models:/ride-duration-predictor/Production'
         """
+        settings = get_settings()
         if model_path is None:
-            settings = get_settings()
-            model_path = settings.model_path
+            model_path = getattr(
+                settings, "model_uri", "models:/ride-duration-predictor/Production"
+            )
 
-        resolved_path = Path(model_path)
+        model_uri_str = str(model_path)
+        if model_uri_str.startswith(("models:/", "runs:/")):
+            logger.info("Loading model from MLflow registry URI: %s", model_uri_str)
+            try:
+                mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+                pyfunc_model = mlflow.pyfunc.load_model(model_uri_str)
+                return cls(
+                    model=pyfunc_model,
+                    feature_names=feature_names,
+                    model_uri=model_uri_str,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load from MLflow URI %s: %s. Attempting fallback to local path %s",
+                    model_uri_str,
+                    exc,
+                    settings.model_path,
+                )
+                if settings.model_path.exists():
+                    return cls.load(settings.model_path, feature_names=feature_names)
+                raise
+
+        resolved_path = Path(model_uri_str)
         if not resolved_path.exists():
             msg = f"Model artifact not found at {resolved_path.resolve()}"
             logger.error("Model load failure: %s", msg)
@@ -117,7 +157,11 @@ class DurationPredictor:
                     "Loading ONNX model session from %s", resolved_path.resolve()
                 )
                 session = ort.InferenceSession(str(resolved_path))
-                return cls(model=session, feature_names=feature_names)
+                return cls(
+                    model=session,
+                    feature_names=feature_names,
+                    model_uri=str(resolved_path),
+                )
             else:
                 logger.info("Loading Pickle model from %s", resolved_path.resolve())
                 with open(resolved_path, "rb") as f:
@@ -131,7 +175,11 @@ class DurationPredictor:
                 else:
                     model = artifact
 
-                return cls(model=model, feature_names=feature_names)
+                return cls(
+                    model=model,
+                    feature_names=feature_names,
+                    model_uri=str(resolved_path),
+                )
         except Exception as err:
             logger.error("Model load failure from %s: %s", resolved_path.resolve(), err)
             raise
@@ -170,7 +218,12 @@ class DurationPredictor:
         logger.debug("Feature vector: %s", prepared[0] if prepared else {})
 
         start_time = time.perf_counter()
-        if self._is_onnx:
+        if self._is_pyfunc:
+            matrix = features_to_matrix(prepared, self.feature_names)
+            df = pd.DataFrame(matrix, columns=self.feature_names)
+            prediction = self.model.predict(df)
+            result = float(np.asarray(prediction).ravel()[0])
+        elif self._is_onnx:
             matrix = features_to_matrix(prepared, self.feature_names)
             outputs = self.model.run([self.output_name], {self.input_name: matrix})
             result = float(outputs[0].ravel()[0])
@@ -211,7 +264,12 @@ class DurationPredictor:
             List of predicted durations in minutes.
         """
         prepared = prepare_features(features)
-        if self._is_onnx:
+        if self._is_pyfunc:
+            matrix = features_to_matrix(prepared, self.feature_names)
+            df = pd.DataFrame(matrix, columns=self.feature_names)
+            predictions = np.asarray(self.model.predict(df)).ravel()
+            return [float(val) for val in predictions]
+        elif self._is_onnx:
             matrix = features_to_matrix(prepared, self.feature_names)
             outputs = self.model.run([self.output_name], {self.input_name: matrix})
             predictions = outputs[0].ravel()
